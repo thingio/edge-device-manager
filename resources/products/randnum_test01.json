@@ -1,0 +1,70 @@
+{
+  "id": "randnum_test01",
+  "name": "生成随机数的模拟设备测试",
+  "desc": "生成随机数的模拟设备测试",
+  "protocol": "randnum",
+  "create_time": 1614664474863,
+  "update_time": 1614664474863,
+  "properties": [
+    {
+      "id": "int",
+      "name": "int",
+      "field_type": "int",
+      "writeable": false,
+      "interval": "10s",
+      "report_mode": "periodical",
+      "aux_props": {}
+    },
+    {
+      "id": "float",
+      "name": "float",
+      "field_type": "float",
+      "writeable": false,
+      "report_mode": "periodical",
+      "interval": "10s",
+      "aux_props": {}
+    }
+  ],
+  "events": [
+    {
+      "id": "test",
+      "name": "test",
+      "desc": "这是一个用于测试的事件",
+      "outs": [
+        {
+          "id": "int",
+          "name": "int",
+          "field_type": "int",
+          "unit": ""
+        },
+        {
+          "id": "float",
+          "name": "float",
+          "field_type": "float",
+          "unit": ""
+        }
+      ]
+    }
+  ],
+  "methods": [
+    {
+      "id": "Intn",
+      "name": "Intn",
+      "desc": "生成指定范围 [0, n) 内的随机整数",
+      "ins": [
+        {
+          "id": "n",
+          "name": "n",
+          "field_type": "int"
+        }
+      ],
+      "outs": [
+        {
+          "id": "v",
+          "name": "v",
+          "field_type": "int"
+        }
+      ]
+    }
+  ]
+}

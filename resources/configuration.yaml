@@ -1,0 +1,8 @@
+message_bus:
+  host: 172.16.251.163
+  port: 1883
+  protocol: tcp
+  connect_timout_millisecond: 30000
+  timeout_millisecond: 1000
+  qos: 0
+  clean_session: false
