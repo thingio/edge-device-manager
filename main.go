@@ -1,11 +1,12 @@
 package main
 
 import (
-	startup "github.com/thingio/edge-device-sdk/pkg/startup/device_manager"
+	"github.com/thingio/edge-device-manager/pkg/metastore"
+	"github.com/thingio/edge-device-manager/pkg/startup"
 )
 
 func main() {
-	metaStore, err := NewFileMetaStore()
+	metaStore, err := metastore.NewFileMetaStore(metastore.DefaultFileMetaStorePath)
 	if err != nil {
 		panic(err)
 	}
