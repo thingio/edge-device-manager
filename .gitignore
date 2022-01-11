@@ -22,3 +22,7 @@ go.sum
 
 # TLS Certificates
 etc/security
+etc/resources
+etc/config.yaml
+
+VERSION

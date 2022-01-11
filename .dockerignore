@@ -1,0 +1,14 @@
+Dockerfile*
+.dockerignore
+docker-compose*
+.env
+
+.git
+.gitignore
+
+go.sum
+
+.vscode
+.idea/
+
+README.md

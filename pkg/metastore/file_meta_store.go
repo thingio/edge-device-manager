@@ -16,7 +16,7 @@ const (
 	productsPath             = "products"
 	devicesPath              = "devices"
 
-	fileMode os.FileMode = 0x664
+	fileMode os.FileMode = 0664 // not 0x664
 )
 
 func NewFileMetaStore(root string) (MetaStore, error) {
@@ -67,7 +67,7 @@ func (s *fileMetaStore) loadProducts(root string, protocolID string) ([]*models.
 	return products, nil
 }
 func (s *fileMetaStore) GetProduct(productID string) (*models.Product, error) {
-	path := filepath.Join(s.root, productID, fmt.Sprintf("%s.json", productID))
+	path := filepath.Join(s.root, productsPath, fmt.Sprintf("%s.json", productID))
 	return loadProduct(path)
 }
 func loadProduct(path string) (*models.Product, error) {
@@ -79,12 +79,12 @@ func loadProduct(path string) (*models.Product, error) {
 }
 
 func (s *fileMetaStore) CreateProduct(product *models.Product) error {
-	// TODO
-	panic("implement me")
+	path := filepath.Join(s.root, productsPath, fmt.Sprintf("%s.json", product.ID))
+	return save(path, product)
 }
 
 func (s *fileMetaStore) DeleteProduct(productID string) error {
-	path := filepath.Join(s.root, productID, fmt.Sprintf("%s.json", productID))
+	path := filepath.Join(s.root, productsPath, fmt.Sprintf("%s.json", productID))
 	return remove(path)
 }
 
@@ -134,8 +134,8 @@ func loadDevice(path string) (*models.Device, error) {
 }
 
 func (s *fileMetaStore) CreateDevice(device *models.Device) error {
-	// TODO
-	panic("implement me")
+	path := filepath.Join(s.root, devicesPath, fmt.Sprintf("%s.json", device.ID))
+	return save(path, device)
 }
 
 func (s *fileMetaStore) UpdateDevice(device *models.Device) error {
@@ -146,6 +146,14 @@ func (s *fileMetaStore) UpdateDevice(device *models.Device) error {
 func (s *fileMetaStore) DeleteDevice(deviceID string) error {
 	path := filepath.Join(s.root, devicesPath, fmt.Sprintf("%s.json", deviceID))
 	return remove(path)
+}
+
+func save(path string, meta interface{}) error {
+	data, err := json.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("fail to marshal the meta configuration, got %s", err.Error())
+	}
+	return ioutil.WriteFile(path, data, fileMode)
 }
 
 func remove(path string) error {
