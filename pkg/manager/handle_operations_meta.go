@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/pkg/errors"
 	"github.com/thingio/edge-device-std/models"
+	"time"
 )
 
 func (m *DeviceManager) monitoringDrivers() {
@@ -31,8 +32,9 @@ func (m *DeviceManager) monitoringDrivers() {
 				}
 			}
 
-			m.protocols.SetDefault(protocol.ID, protocol) // set or reset the cache
-			m.logger.Infof("the protocol driver[%s]'s status now is %s", protocol.ID, status.State)
+			m.protocols.Set(protocol.ID, protocol,
+				time.Duration(status.HealthCheckIntervalSecond+1)*time.Second) // set or reset the cache
+			m.logger.Debugf("the protocol driver[%s]'s status now is %s", protocol.ID, status.State)
 		case <-m.ctx.Done():
 			stop()
 			return
@@ -58,10 +60,6 @@ func (m *DeviceManager) initDriver(protocolID string) error {
 			case models.DeviceStateException:
 				m.logger.Debugf("the device[%s] is disconnected for some exception, try to reconnect it")
 				onlineDevices = append(onlineDevices, device)
-			case models.DeviceStateDisconnected:
-				if m.cfg.CommonOptions.DeviceAutoReconnect {
-					onlineDevices = append(onlineDevices, device)
-				}
 			}
 		}
 	}
@@ -89,7 +87,11 @@ func (m *DeviceManager) monitoringDevices(protocolID string) {
 				m.logger.Errorf("invalid format of device status")
 				break
 			}
+
 			device := status.Device
+			if device.DeviceStatus == status.State {
+				break
+			}
 			device.DeviceStatus = status.State
 			if err = m.metaStore.UpdateDevice(device); err != nil {
 				m.logger.WithError(err).Errorf("fail to update the device[%s]'s status", device.ID)
@@ -105,5 +107,5 @@ func (m *DeviceManager) monitoringDevices(protocolID string) {
 }
 
 func (m *DeviceManager) unregisterDriver(protocolID string, protocol interface{}) {
-	m.logger.Infof("the protocol[%s] has been disconnected", protocolID)
+	m.logger.Debugf("the protocol[%s] has been disconnected", protocolID)
 }
