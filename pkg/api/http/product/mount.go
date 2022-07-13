@@ -4,17 +4,13 @@ import (
 	"fmt"
 	restfulspec "github.com/emicklei/go-restful-openapi/v2"
 	"github.com/emicklei/go-restful/v3"
-	"github.com/patrickmn/go-cache"
-	"github.com/thingio/edge-device-manager/pkg/metastore"
+	"github.com/thingio/edge-device-manager/pkg/manager"
 	"github.com/thingio/edge-device-std/models"
-	"github.com/thingio/edge-device-std/operations"
 	"net/http"
 )
 
 type Resource struct {
-	ProtocolCache   *cache.Cache
-	MetaStore       metastore.MetaStore
-	OperationClient operations.ManagerClient
+	Manager *manager.DeviceManager
 }
 
 func (r Resource) WebService(root string) *restful.WebService {

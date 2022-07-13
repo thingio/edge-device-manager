@@ -31,7 +31,6 @@ func (m *DeviceManager) monitoringDrivers() {
 					break
 				}
 			}
-
 			m.protocols.Set(protocol.ID, protocol,
 				time.Duration(status.HealthCheckIntervalSecond+1)*time.Second) // set or reset the cache
 			m.logger.Debugf("the protocol driver[%s]'s status now is %s", protocol.ID, status.State)
@@ -58,8 +57,12 @@ func (m *DeviceManager) initDriver(protocolID string) error {
 			case models.DeviceStateReconnecting, models.DeviceStateConnected:
 				onlineDevices = append(onlineDevices, device)
 			case models.DeviceStateException:
-				m.logger.Debugf("the device[%s] is disconnected for some exception, try to reconnect it")
+				m.logger.Debugf("the device[%s] is disconnected for some exception, try to reconnect it", device.ID)
 				onlineDevices = append(onlineDevices, device)
+			}
+
+			if err = m.activateRecorder(product, device); err != nil {
+				return errors.Wrap(err, fmt.Sprintf("fail to activate recorder for the device[%s]", device.ID))
 			}
 		}
 	}
@@ -93,11 +96,11 @@ func (m *DeviceManager) monitoringDevices(protocolID string) {
 				break
 			}
 			device.DeviceStatus = status.State
-			if err = m.metaStore.UpdateDevice(device); err != nil {
+			if err = m.UpdateDevice(device); err != nil {
 				m.logger.WithError(err).Errorf("fail to update the device[%s]'s status", device.ID)
 			} else {
-				m.logger.Debugf("success to update the device[%s]'s status: (%s: %s)",
-					device.ID, status.State, status.StateDetail)
+				m.logger.Debugf("success to update the device[%s]'s status: (%s) -> (%s: %s)",
+					device.ID, device.DeviceStatus, status.State, status.StateDetail)
 			}
 		case <-m.ctx.Done():
 			stop()
@@ -107,5 +110,177 @@ func (m *DeviceManager) monitoringDevices(protocolID string) {
 }
 
 func (m *DeviceManager) unregisterDriver(protocolID string, protocol interface{}) {
-	m.logger.Debugf("the protocol[%s] has been disconnected", protocolID)
+	m.logger.Debugf("the protocol driver[%s] has been disconnected", protocolID)
+}
+
+func (m *DeviceManager) GetProtocol(protocolID string) (*models.Protocol, error) {
+	v, ok := m.protocols.Get(protocolID)
+	if !ok {
+		return nil, errors.New("the protocol[%s] is not found")
+	}
+	return v.(*models.Protocol), nil
+}
+func (m *DeviceManager) ListProtocols() ([]*models.Protocol, error) {
+	protocols := make([]*models.Protocol, 0)
+	for _, protocol := range m.protocols.Items() {
+		protocols = append(protocols, protocol.Object.(*models.Protocol))
+	}
+	return protocols, nil
+}
+
+func (m *DeviceManager) CreateProduct(product *models.Product) error {
+	if product.Name == "" {
+		product.Name = product.ID
+	}
+
+	return m.metaStore.CreateProduct(product)
+}
+func (m *DeviceManager) DeleteProduct(productID string) error {
+	product, err := m.GetProduct(productID)
+	if err != nil {
+		return err
+	}
+	if err := m.metaStore.DeleteProduct(productID); err != nil {
+		return err
+	}
+	protocolID := product.Protocol
+	if err := m.mc.DeleteProduct(protocolID, productID); err != nil {
+		return err
+	}
+
+	devices, err := m.ListDevices(productID)
+	if err != nil {
+		return err
+	}
+	for _, device := range devices {
+		if err = m.DeleteDevice(device.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (m *DeviceManager) UpdateProduct(product *models.Product) error {
+	if err := m.metaStore.UpdateProduct(product); err != nil {
+		return err
+	} else if err = m.mc.UpdateProduct(product.Protocol, product); err != nil {
+		return err
+	}
+	return nil
+}
+func (m *DeviceManager) ListProducts(protocolID string) ([]*models.Product, error) {
+	return m.metaStore.ListProducts(protocolID)
+}
+func (m *DeviceManager) GetProduct(productID string) (*models.Product, error) {
+	return m.metaStore.GetProduct(productID)
+}
+
+func (m *DeviceManager) CreateDevice(product *models.Product, device *models.Device) error {
+	if device.Name == "" {
+		device.Name = device.ID
+	}
+	if device.DeviceStatus == "" {
+		device.DeviceStatus = models.DeviceStateDisconnected
+	}
+
+	if err := m.metaStore.CreateDevice(device); err != nil {
+		return err
+	} else if err = m.mc.UpdateDevice(product.ID, device); err != nil {
+		return err
+	}
+
+	if err := m.activateRecorder(product, device); err != nil {
+		return err
+	}
+	return nil
+}
+func (m *DeviceManager) DeleteDevice(deviceID string) error {
+	protocolID, _, err := m.trace(deviceID)
+	if err != nil {
+		return err
+	}
+	if err := m.metaStore.DeleteDevice(deviceID); err != nil {
+		return err
+	} else if err := m.mc.DeleteDevice(protocolID, deviceID); err != nil {
+		return err
+	}
+
+	if err := m.deactivateRecorder(deviceID); err != nil {
+		return err
+	}
+	return nil
+}
+func (m *DeviceManager) UpdateDevice(device *models.Device) error {
+	protocolID, _, err := m.trace(device.ID)
+	if err != nil {
+		return err
+	}
+	if err := m.metaStore.UpdateDevice(device); err != nil {
+		return err
+	} else if err := m.mc.UpdateDevice(protocolID, device); err != nil {
+		return err
+	}
+
+	if device.Recording {
+		if _, ok := m.recorders.Get(device.ID); !ok {
+			product, err := m.GetProduct(device.ProductID)
+			if err != nil {
+				return err
+			}
+			if err = m.activateRecorder(product, device); err != nil {
+				return err
+			}
+		}
+	} else {
+		if err := m.deactivateRecorder(device.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (m *DeviceManager) ListDevices(productID string) ([]*models.Device, error) {
+	return m.metaStore.ListDevices(productID)
+}
+func (m *DeviceManager) GetDevice(deviceID string) (*models.Device, error) {
+	return m.metaStore.GetDevice(deviceID)
+}
+
+func (m *DeviceManager) trace(deviceID string) (protocolID, productID string, err error) {
+	if device, err := m.metaStore.GetDevice(deviceID); err != nil {
+		return "", "", err
+	} else {
+		productID = device.ProductID
+	}
+
+	if product, err := m.metaStore.GetProduct(productID); err != nil {
+		return "", "", err
+	} else {
+		protocolID = product.Protocol
+	}
+	return protocolID, productID, nil
+}
+
+func (m *DeviceManager) activateRecorder(product *models.Product, device *models.Device) error {
+	if !device.Recording {
+		return nil
+	}
+
+	recorder, err := NewDeviceRecorder(m.logger, product, device, m.ctx, m.ms, m.dataStore)
+	if err != nil {
+		return err
+	}
+	go recorder.Start()
+	m.recorders.SetDefault(device.ID, recorder)
+	return nil
+}
+
+func (m *DeviceManager) deactivateRecorder(deviceID string) error {
+	if v, ok := m.recorders.Get(deviceID); ok {
+		defer m.recorders.Delete(deviceID)
+		
+		recorder := v.(*Recorder)
+		if err := recorder.Stop(false); err != nil {
+			return err
+		}
+	}
+	return nil
 }

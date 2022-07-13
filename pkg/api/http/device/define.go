@@ -1,16 +1,13 @@
 package device
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"github.com/emicklei/go-restful/v3"
-	"github.com/gobwas/ws"
-	"github.com/gobwas/ws/wsutil"
+	"github.com/thingio/edge-device-manager/pkg/datastore/query"
+	"github.com/thingio/edge-device-manager/pkg/utils"
 	"github.com/thingio/edge-device-std/errors"
 	"github.com/thingio/edge-device-std/models"
 	"net/http"
-	"os"
 )
 
 const (
@@ -39,7 +36,7 @@ const (
 	PathParamEventIDType = "string"
 )
 
-func (r Resource) createDevice(request *restful.Request, response *restful.Response) {
+func (r *Resource) createDevice(request *restful.Request, response *restful.Response) {
 	device := new(models.Device)
 	if err := request.ReadEntity(device); err != nil {
 		_ = response.WriteError(http.StatusBadRequest,
@@ -51,49 +48,35 @@ func (r Resource) createDevice(request *restful.Request, response *restful.Respo
 		_ = response.WriteError(http.StatusBadRequest,
 			errors.BadRequest.Error("the device's ID is required"))
 		return
-	} else if device.Name == "" {
-		device.Name = deviceID
 	}
-
-	var protocolID string
 	productID := device.ProductID
 	if productID == "" {
 		_ = response.WriteError(http.StatusBadRequest,
-			errors.Internal.Error("the device[%s]'s product must be specified", deviceID))
+			errors.Internal.Error("the device[%s]'s ProductID is required", deviceID))
 		return
-	} else {
-		if product, err := r.MetaStore.GetProduct(productID); err != nil {
-			_ = response.WriteError(http.StatusNotFound,
-				errors.Internal.Error("the product[%s] is not found", productID))
-			return
-		} else {
-			device.ProductName = product.Name
-			protocolID = product.Protocol
-		}
 	}
-	if _, err := r.MetaStore.GetDevice(deviceID); err == nil { // verify the duplication of the device
+
+	product, err := r.Manager.GetProduct(productID)
+	if err != nil {
+		_ = response.WriteError(http.StatusNotFound,
+			errors.Internal.Error("the product[%s] is not found", productID))
+		return
+	}
+	_, err = r.Manager.GetDevice(deviceID)
+	if err == nil { // verify the duplication of the device
 		_ = response.WriteError(http.StatusConflict,
 			errors.Internal.Error("the device[%s] is already created", deviceID))
 		return
 	}
 
-	// set the device's status
-	if device.DeviceStatus == "" {
-		device.DeviceStatus = models.DeviceStateDisconnected
-	}
-
-	if err := r.MetaStore.CreateDevice(device); err != nil {
+	if err := r.Manager.CreateDevice(product, device); err != nil {
 		_ = response.WriteError(http.StatusInternalServerError,
-			errors.Internal.Cause(err, "fail to create the device[%s]", deviceID))
-		return
-	} else if err = r.OperationClient.UpdateDevice(protocolID, device); err != nil {
-		_ = response.WriteError(http.StatusInternalServerError,
-			errors.Internal.Cause(err, "fail to send message about creating device[%s] to the driver[%s]", deviceID, protocolID))
+			errors.Internal.Cause(err, "fail to create the device: %+v", device))
 		return
 	}
 	_ = response.WriteEntity(device)
 }
-func (r Resource) deleteDevice(request *restful.Request, response *restful.Response) {
+func (r *Resource) deleteDevice(request *restful.Request, response *restful.Response) {
 	deviceID := request.PathParameter(PathParamDeviceID)
 	if deviceID == "" {
 		_ = response.WriteError(http.StatusBadRequest,
@@ -101,22 +84,14 @@ func (r Resource) deleteDevice(request *restful.Request, response *restful.Respo
 		return
 	}
 
-	protocolID, _, err := r.trace(deviceID)
-	if err != nil {
+	if err := r.Manager.DeleteDevice(deviceID); err != nil {
 		_ = response.WriteError(http.StatusInternalServerError,
-			errors.Internal.Cause(err, "fail to trace the device[%s]", deviceID))
-	}
-	if err := r.MetaStore.DeleteDevice(deviceID); err != nil {
-		_ = response.WriteError(http.StatusInternalServerError,
-			errors.Internal.Cause(err, "fail to delete the device[%s]", deviceID))
-		return
-	} else if err := r.OperationClient.DeleteDevice(protocolID, deviceID); err != nil {
-		_ = response.WriteError(http.StatusInternalServerError,
-			errors.Internal.Cause(err, "fail to send message about deleting device to the driver[%s]", protocolID))
+			errors.Internal.Cause(err, "failed to delete the device[%s]", deviceID))
 		return
 	}
+	_ = response.WriteEntity(struct{}{})
 }
-func (r Resource) updateDevice(request *restful.Request, response *restful.Response) {
+func (r *Resource) updateDevice(request *restful.Request, response *restful.Response) {
 	deviceID := request.PathParameter(PathParamDeviceID)
 	if deviceID == "" {
 		_ = response.WriteError(http.StatusBadRequest,
@@ -129,41 +104,33 @@ func (r Resource) updateDevice(request *restful.Request, response *restful.Respo
 			errors.BadRequest.Error("fail to parse the request body"))
 	}
 
-	protocolID, _, err := r.trace(deviceID)
-	if err != nil {
+	if err := r.Manager.UpdateDevice(device); err != nil {
 		_ = response.WriteError(http.StatusInternalServerError,
-			errors.Internal.Cause(err, "fail to trace the device[%s]", deviceID))
-	}
-	if err := r.MetaStore.UpdateDevice(device); err != nil {
-		_ = response.WriteError(http.StatusInternalServerError,
-			errors.Internal.Cause(err, "fail to update the device[%s]", deviceID))
-		return
-	} else if err := r.OperationClient.UpdateDevice(protocolID, device); err != nil {
-		_ = response.WriteError(http.StatusInternalServerError,
-			errors.Internal.Cause(err, "fail to send message about updating device to the driver[%s]", protocolID))
+			errors.Internal.Cause(err, "failed to update the device[%s]", deviceID))
 		return
 	}
+	_ = response.WriteEntity(device)
 }
-func (r Resource) findAllDevices(request *restful.Request, response *restful.Response) {
+func (r *Resource) findAllDevices(request *restful.Request, response *restful.Response) {
 	productID := request.QueryParameter(QueryParamProductID)
 	if productID == "" {
 		_ = response.WriteError(http.StatusBadRequest, fmt.Errorf("the query parameter[%s] is required", QueryParamProductID))
 		return
 	}
-	devices, err := r.MetaStore.ListDevices(productID)
+	devices, err := r.Manager.ListDevices(productID)
 	if err != nil {
 		_ = response.WriteError(http.StatusInternalServerError, err)
 		return
 	}
 	_ = response.WriteEntity(devices)
 }
-func (r Resource) findDevice(request *restful.Request, response *restful.Response) {
+func (r *Resource) findDevice(request *restful.Request, response *restful.Response) {
 	deviceID := request.PathParameter(PathParamDeviceID)
 	if deviceID == "" {
 		_ = response.WriteError(http.StatusBadRequest, fmt.Errorf("the path parameter[%s] is required", PathParamDeviceID))
 		return
 	}
-	device, err := r.MetaStore.GetDevice(deviceID)
+	device, err := r.Manager.GetDevice(deviceID)
 	if err != nil {
 		_ = response.WriteError(http.StatusInternalServerError, err)
 		return
@@ -171,7 +138,7 @@ func (r Resource) findDevice(request *restful.Request, response *restful.Respons
 	_ = response.WriteEntity(device)
 }
 
-func (r Resource) watchProperties(request *restful.Request, response *restful.Response) {
+func (r *Resource) watchProperties(request *restful.Request, response *restful.Response) {
 	deviceID := request.PathParameter(PathParamDeviceID)
 	if deviceID == "" {
 		_ = response.WriteError(http.StatusBadRequest,
@@ -179,24 +146,18 @@ func (r Resource) watchProperties(request *restful.Request, response *restful.Re
 		return
 	}
 
-	protocolID, productID, err := r.trace(deviceID)
+	bus, stop, err := r.Manager.SubscribeDeviceProps(deviceID)
 	if err != nil {
 		_ = response.WriteError(http.StatusInternalServerError,
-			errors.Internal.Cause(err, "fail to trace the device[%s]", deviceID))
+			errors.Internal.Error("fail to subscribe props for the device[%s]", deviceID))
 		return
 	}
-	bus, stop, err := r.OperationService.SubscribeDeviceProps(protocolID, productID, deviceID, models.DeviceDataMultiPropsID)
-	if err != nil {
-		_ = response.WriteError(http.StatusInternalServerError,
-			errors.Internal.Cause(err, "fail to watch the properties of the device[%s]", deviceID))
-		return
-	}
-	if err := sendWSMessage(request, response, bus, stop); err != nil {
+	if err := utils.SendWSMessage(request, response, bus, stop); err != nil {
 		_ = response.WriteError(http.StatusInternalServerError,
 			errors.Internal.Cause(err, "fail to send messages to the device[%s] in a WebSocket connection", deviceID))
 	}
 }
-func (r Resource) readProperties(request *restful.Request, response *restful.Response) {
+func (r *Resource) readProperties(request *restful.Request, response *restful.Response) {
 	deviceID := request.PathParameter(PathParamDeviceID)
 	if deviceID == "" {
 		_ = response.WriteError(http.StatusBadRequest,
@@ -214,30 +175,28 @@ func (r Resource) readProperties(request *restful.Request, response *restful.Res
 		readType = QueryParamPropertyReadTypeSoft
 	}
 
-	protocolID, productID, err := r.trace(deviceID)
-	if err != nil {
-		_ = response.WriteError(http.StatusInternalServerError,
-			errors.Internal.Cause(err, "fail to trace the device[%s]", deviceID))
-		return
-	}
-	var props map[models.ProductPropertyID]*models.DeviceData
 	switch readType {
 	case QueryParamPropertyReadTypeSoft:
-		if props, err = r.OperationClient.Read(protocolID, productID, deviceID, propertyID); err != nil {
+		props, err := r.Manager.Read(deviceID, propertyID)
+		if err != nil {
 			_ = response.WriteError(http.StatusInternalServerError,
 				errors.Internal.Cause(err, "fail to read softly the properties[%s] of the device[%s]", propertyID, deviceID))
 			return
 		}
+		_ = response.WriteEntity(props)
 	case QueryParamPropertyReadTypeHard:
-		if props, err = r.OperationClient.HardRead(protocolID, productID, deviceID, propertyID); err != nil {
+		props, err := r.Manager.HardRead(deviceID, propertyID)
+		if err != nil {
 			_ = response.WriteError(http.StatusInternalServerError,
 				errors.Internal.Cause(err, "fail to read hardly the properties[%s] of the device[%s]", propertyID, deviceID))
 			return
 		}
+		_ = response.WriteEntity(props)
+	default:
+		_ = response.WriteError(http.StatusBadRequest, errors.BadRequest.Error("unsupported read type: %s", readType))
 	}
-	_ = response.WriteEntity(props)
 }
-func (r Resource) writeProperties(request *restful.Request, response *restful.Response) {
+func (r *Resource) writeProperties(request *restful.Request, response *restful.Response) {
 	deviceID := request.PathParameter(PathParamDeviceID)
 	if deviceID == "" {
 		_ = response.WriteError(http.StatusBadRequest,
@@ -257,19 +216,14 @@ func (r Resource) writeProperties(request *restful.Request, response *restful.Re
 		return
 	}
 
-	protocolID, productID, err := r.trace(deviceID)
-	if err != nil {
-		_ = response.WriteError(http.StatusInternalServerError,
-			errors.Internal.Cause(err, "fail to trace the device[%s]", deviceID))
-		return
-	}
-	if err := r.OperationClient.Write(protocolID, productID, deviceID, propertyID, props); err != nil {
+	if err := r.Manager.Write(deviceID, propertyID, props); err != nil {
 		_ = response.WriteError(http.StatusInternalServerError,
 			errors.Internal.Cause(err, "fail to write the properties[%s] of the device[%s]", propertyID, deviceID))
 		return
 	}
+	_ = response.WriteEntity(struct{}{})
 }
-func (r Resource) callMethod(request *restful.Request, response *restful.Response) {
+func (r *Resource) callMethod(request *restful.Request, response *restful.Response) {
 	deviceID := request.PathParameter(PathParamDeviceID)
 	if deviceID == "" {
 		_ = response.WriteError(http.StatusBadRequest,
@@ -289,13 +243,7 @@ func (r Resource) callMethod(request *restful.Request, response *restful.Respons
 		return
 	}
 
-	protocolID, productID, err := r.trace(deviceID)
-	if err != nil {
-		_ = response.WriteError(http.StatusInternalServerError,
-			errors.Internal.Cause(err, "fail to trace the device[%s]", deviceID))
-		return
-	}
-	outs, err := r.OperationClient.Call(protocolID, productID, deviceID, methodID, ins)
+	outs, err := r.Manager.Call(deviceID, methodID, ins)
 	if err != nil {
 		_ = response.WriteError(http.StatusInternalServerError,
 			errors.Internal.Cause(err, "fail to call the method[%s] of the device[%s]", methodID, deviceID))
@@ -303,7 +251,7 @@ func (r Resource) callMethod(request *restful.Request, response *restful.Respons
 	}
 	_ = response.WriteEntity(outs)
 }
-func (r Resource) subscribeEvent(request *restful.Request, response *restful.Response) {
+func (r *Resource) subscribeEvent(request *restful.Request, response *restful.Response) {
 	deviceID := request.PathParameter(PathParamDeviceID)
 	if deviceID == "" {
 		_ = response.WriteError(http.StatusBadRequest,
@@ -317,79 +265,59 @@ func (r Resource) subscribeEvent(request *restful.Request, response *restful.Res
 		return
 	}
 
-	protocolID, productID, err := r.trace(deviceID)
-	if err != nil {
-		_ = response.WriteError(http.StatusInternalServerError,
-			errors.Internal.Cause(err, "fail to trace the device[%s]", deviceID))
-		return
-	}
-	bus, stop, err := r.OperationService.SubscribeDeviceEvent(protocolID, productID, deviceID, eventID)
+	bus, stop, err := r.Manager.SubscribeDeviceEvent(deviceID, eventID)
 	if err != nil {
 		_ = response.WriteError(http.StatusInternalServerError,
 			errors.Internal.Cause(err, "fail to subscribe the event[%s] of the device[%s]", eventID, deviceID))
 		return
 	}
-	if err := sendWSMessage(request, response, bus, stop); err != nil {
+	if err := utils.SendWSMessage(request, response, bus, stop); err != nil {
 		_ = response.WriteError(http.StatusInternalServerError,
 			errors.Internal.Cause(err, "fail to send messages to the device[%s] in a WebSocket connection", deviceID))
 		return
 	}
 }
 
-// sendWSMessage will upgrade an HTTP connection to a WebSocket connection,
-// and then sends message from the bus into this connection until it is closed
-func sendWSMessage(request *restful.Request, response *restful.Response, bus <-chan interface{}, stop func()) error {
-	conn, _, _, err := ws.UpgradeHTTP(request.Request, response.ResponseWriter)
-	if err != nil {
-		return errors.Internal.Cause(err, "fail to upgrade HTTP as WebSocket")
+func (r *Resource) getDevicePropertiesHistory(request *restful.Request, response *restful.Response) {
+	deviceID := request.PathParameter(PathParamDeviceID)
+	if deviceID == "" {
+		_ = response.WriteError(http.StatusBadRequest,
+			errors.BadRequest.Error("the path parameter[%s] is required", PathParamDeviceID))
+		return
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		defer func() {
-			cancel()
-			_ = conn.Close()
-		}()
-		for {
-			data, _, err := wsutil.ReadClientData(conn)
-			if err != nil {
-				if err.Error() == "EOF" { // the connection is already disconnected
-					return
-				}
-				continue
-			}
-			if string(data) == "stop" {
-				return
-			}
-		}
-	}()
-	for {
-		select {
-		case event := <-bus:
-			if data, err := json.Marshal(event); err != nil {
-				_, _ = fmt.Fprintf(os.Stderr, err.Error())
-				break
-			} else {
-				_ = wsutil.WriteServerMessage(conn, ws.OpText, data)
-			}
-		case <-ctx.Done():
-			stop()
-			return nil
-		}
+	req := new(query.Request)
+	if err := request.ReadEntity(req); err != nil {
+		_ = response.WriteError(http.StatusBadRequest,
+			errors.BadRequest.Cause(err, "fail to parse the request body"))
+		return
 	}
+	data, err := r.Manager.GetDevicePropertiesHistory(deviceID, req)
+	if err != nil {
+		_ = response.WriteError(http.StatusInternalServerError,
+			errors.Internal.Cause(err, "fail to get device properties history by request: %+v", req))
+	}
+	_ = response.WriteEntity(data)
 }
 
-func (r Resource) trace(deviceID string) (protocolID, productID string, err error) {
-	if device, err := r.MetaStore.GetDevice(deviceID); err != nil {
-		return "", "", err
-	} else {
-		productID = device.ProductID
+func (r *Resource) getDeviceEventsHistory(request *restful.Request, response *restful.Response) {
+	deviceID := request.PathParameter(PathParamDeviceID)
+	if deviceID == "" {
+		_ = response.WriteError(http.StatusBadRequest,
+			errors.BadRequest.Error("the path parameter[%s] is required", PathParamDeviceID))
+		return
 	}
 
-	if product, err := r.MetaStore.GetProduct(productID); err != nil {
-		return "", "", err
-	} else {
-		protocolID = product.Protocol
+	req := new(query.Request)
+	if err := request.ReadEntity(req); err != nil {
+		_ = response.WriteError(http.StatusBadRequest,
+			errors.BadRequest.Cause(err, "fail to parse the request body"))
+		return
 	}
-	return protocolID, productID, nil
+	data, err := r.Manager.GetDeviceEventsHistory(deviceID, req)
+	if err != nil {
+		_ = response.WriteError(http.StatusInternalServerError,
+			errors.Internal.Cause(err, "fail to get device events history by request: %+v", req))
+	}
+	_ = response.WriteEntity(data)
 }

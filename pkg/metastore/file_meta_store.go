@@ -1,8 +1,11 @@
 package metastore
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/thingio/edge-device-std/config"
+	"github.com/thingio/edge-device-std/logger"
 	"github.com/thingio/edge-device-std/models"
 	"gopkg.in/yaml.v2"
 	"io/fs"
@@ -12,14 +15,14 @@ import (
 )
 
 const (
-	DefaultFileMetaStorePath = "etc/resources"
-	productsPath             = "products"
-	devicesPath              = "devices"
+	productsPath = "products"
+	devicesPath  = "devices"
 
 	fileMode os.FileMode = 0664 // not 0x664
 )
 
-func NewFileMetaStore(root string) (MetaStore, error) {
+func NewFileMetaStore(ctx context.Context, lg *logger.Logger, opts *config.FileOptions) (MetaStore, error) {
+	root := opts.Path
 	if _, err := os.Open(root); err != nil {
 		if os.IsNotExist(err) {
 			if err = os.MkdirAll(root, fileMode); err != nil {

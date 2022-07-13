@@ -42,7 +42,16 @@ func getSwaggerJson(request *restful.Request, response *restful.Response) {
 		WebServices:                   restful.RegisteredWebServices(),
 		PostBuildSwaggerObjectHandler: enrichSwaggerObject,
 	}
-	_ = response.WriteEntity(restfulspec.BuildSwagger(config))
+	swagger := restfulspec.BuildSwagger(config)
+	swagger.Info = &spec.Info{
+		InfoProps: spec.InfoProps{
+			Title:       "Device Manager API DOCS",
+			Description: "API Docs for ThingIO - Edge Device Manager",
+			Version:     "1.0.0",
+		},
+	}
+	swagger.Schemes = []string{"http", "https"}
+	_ = response.WriteEntity(swagger)
 }
 
 func enrichSwaggerObject(s *spec.Swagger) {
