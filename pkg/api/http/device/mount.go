@@ -4,19 +4,17 @@ import (
 	"fmt"
 	restfulspec "github.com/emicklei/go-restful-openapi/v2"
 	"github.com/emicklei/go-restful/v3"
-	"github.com/thingio/edge-device-manager/pkg/metastore"
+	"github.com/thingio/edge-device-manager/pkg/datastore/query"
+	"github.com/thingio/edge-device-manager/pkg/manager"
 	"github.com/thingio/edge-device-std/models"
-	"github.com/thingio/edge-device-std/operations"
 	"net/http"
 )
 
 type Resource struct {
-	MetaStore        metastore.MetaStore
-	OperationClient  operations.ManagerClient
-	OperationService operations.ManagerService
+	Manager *manager.DeviceManager
 }
 
-func (r Resource) WebService(root string) *restful.WebService {
+func (r *Resource) WebService(root string) *restful.WebService {
 	ws := new(restful.WebService)
 	ws.Path(root).
 		Consumes(restful.MIME_JSON).
@@ -74,12 +72,12 @@ func (r Resource) WebService(root string) *restful.WebService {
 
 	dataTags := []string{"DEVICE DATA OPERATION"}
 
-	ws.Route(ws.GET(fmt.Sprintf("/{%s}/properties", PathParamDeviceID)).To(r.watchProperties).
+	ws.Route(ws.GET(fmt.Sprintf("/{%s}/properties/-/watch", PathParamDeviceID)).To(r.watchProperties).
 		// docs
-		Doc("watch the device properties").
+		Doc("watch the device properties using WebSocket").
 		Notes("When you want to observe changes of device properties for a long time, it is more efficient than polling to call the read interface"+
-			"The connection will upgrade as the websocket protocol.\n"+
-			"For example, we can open a websocket connection using 'ws://127.0.0.1:8080/api/v1/devices/randnum_test01/properties';\n"+
+			"The connection will upgrade as the <b>WebSocket</b> protocol.\n"+
+			"For example, we can open a websocket connection using 'ws://127.0.0.1:10996/api/v1/devices/randnum_test01/properties';\n"+
 			"How to test quickly? \n"+
 			"  1. open the browser and visit the webpage 'http://www.jsons.cn/websocket/';\n"+
 			"  2. input 'ws://127.0.0.1:10996/api/v1/devices/randnum_test01/properties' to replace '请输入要检测的Websocket地址，例如：ws://localhost:8080/wssajax' and click the button 'Websocket连接';\n"+
@@ -124,11 +122,18 @@ func (r Resource) WebService(root string) *restful.WebService {
 		Writes(map[models.ProductPropertyID]models.DeviceData{}).
 		Returns(http.StatusOK, http.StatusText(http.StatusOK), map[models.ProductPropertyID]models.DeviceData{}).
 		Returns(http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError), nil))
-	ws.Route(ws.GET(fmt.Sprintf("/{%s}/events/{%s}", PathParamDeviceID, PathParamEventID)).To(r.subscribeEvent).
+	ws.Route(ws.POST(fmt.Sprintf("/{%s}/properties/-/history", PathParamDeviceID)).To(r.getDevicePropertiesHistory).
+		Doc("get historical data of device properties in a readable format").
+		Metadata(restfulspec.KeyOpenAPITags, dataTags).
+		Param(ws.PathParameter(PathParamDeviceID, PathParamDeviceIDDesc).DataType(PathParamDeviceIDType)).
+		Reads(query.Request{}).
+		Writes(query.Response{}).
+		Returns(http.StatusOK, http.StatusText(http.StatusOK), query.Response{}))
+	ws.Route(ws.GET(fmt.Sprintf("/{%s}/events/{%s}/watch", PathParamDeviceID, PathParamEventID)).To(r.subscribeEvent).
 		// docs
-		Doc("subscribe the device event").
-		Notes("The connection will upgrade as the websocket protocol.\n"+
-			"For example, we can open a websocket connection using 'ws://127.0.0.1:8080/api/v1/devices/randnum_test01/events/test';\n"+
+		Doc("subscribe the device event using WebSocket").
+		Notes("The connection will upgrade as the <b>WebSocket</b> protocol.\n"+
+			"For example, we can open a websocket connection using 'ws://127.0.0.1:10996/api/v1/devices/randnum_test01/events/test';\n"+
 			"How to test quickly? \n"+
 			"  1. open the browser and visit the webpage 'http://www.jsons.cn/websocket/';\n"+
 			"  2. input 'ws://127.0.0.1:10996/api/v1/devices/randnum_test01/events/test' to replace '请输入要检测的Websocket地址，例如：ws://localhost:8080/wssajax' and click the button 'Websocket连接';\n"+
@@ -141,6 +146,12 @@ func (r Resource) WebService(root string) *restful.WebService {
 		Param(ws.PathParameter(PathParamDeviceID, PathParamDeviceIDDesc).DataType(PathParamDeviceIDType)).
 		Param(ws.PathParameter(PathParamEventID, PathParamEventIDDesc).DataType(PathParamEventIDType)).
 		Returns(http.StatusOK, http.StatusText(http.StatusOK), nil))
-
+	ws.Route(ws.POST(fmt.Sprintf("/{%s}/events/-/history", PathParamDeviceID)).To(r.getDeviceEventsHistory).
+		Doc("get historical data of device events in a readable format").
+		Metadata(restfulspec.KeyOpenAPITags, dataTags).
+		Param(ws.PathParameter(PathParamDeviceID, PathParamDeviceIDDesc).DataType(PathParamDeviceIDType)).
+		Reads(query.Request{}).
+		Writes(query.Response{}).
+		Returns(http.StatusOK, http.StatusText(http.StatusOK), query.Response{}))
 	return ws
 }

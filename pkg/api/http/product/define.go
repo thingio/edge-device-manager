@@ -29,29 +29,26 @@ func (r Resource) createProduct(request *restful.Request, response *restful.Resp
 		_ = response.WriteError(http.StatusBadRequest,
 			errors.BadRequest.Error("the product's ID is required"))
 		return
-	} else if product.Name == "" {
-		product.Name = productID
 	}
-	protocolID := product.Protocol
-	if protocolID == "" {
-		_ = response.WriteError(http.StatusBadRequest,
-			errors.Internal.Error("the product[%s]'s protocol must be specified", productID))
-		return
-	} else {
-		_, ok := r.ProtocolCache.Get(protocolID)
-		if !ok {
-			_ = response.WriteError(http.StatusNotFound,
-				errors.Internal.Error("the protocol[%s] is not available yet", protocolID))
-			return
-		}
-	}
-	if _, err := r.MetaStore.GetProduct(productID); err == nil { // verify the duplication of the product
+	if _, err := r.Manager.GetProduct(productID); err == nil { // verify the duplication of the product
 		_ = response.WriteError(http.StatusConflict,
 			errors.Internal.Error("the product[%s] is already created", productID))
 		return
 	}
 
-	if err := r.MetaStore.CreateProduct(product); err != nil {
+	protocolID := product.Protocol
+	if protocolID == "" {
+		_ = response.WriteError(http.StatusBadRequest,
+			errors.Internal.Error("the product[%s]'s ProtocolID is required", productID))
+		return
+	}
+	if _, err := r.Manager.GetProtocol(protocolID); err != nil {
+		_ = response.WriteError(http.StatusNotFound,
+			errors.Internal.Error("the protocol[%s] is not found", protocolID))
+		return
+	}
+
+	if err := r.Manager.CreateProduct(product); err != nil {
 		_ = response.WriteError(http.StatusInternalServerError,
 			errors.Internal.Cause(err, "fail to create the product[%s]", productID))
 		return
@@ -67,35 +64,12 @@ func (r Resource) deleteProduct(request *restful.Request, response *restful.Resp
 		return
 	}
 
-	var protocolID string
-	if product, err := r.MetaStore.GetProduct(productID); err != nil {
-		_ = response.WriteError(http.StatusInternalServerError,
-			errors.Internal.Cause(err, "fail to find the product[%s]", productID))
-		return
-	} else {
-		protocolID = product.Protocol
-	}
-
-	if err := r.MetaStore.DeleteProduct(productID); err != nil {
+	if err := r.Manager.DeleteProduct(productID); err != nil {
 		_ = response.WriteError(http.StatusInternalServerError,
 			errors.Internal.Cause(err, "fail to delete the product[%s]", productID))
 		return
-	} else {
-		devices, err := r.MetaStore.ListDevices(productID)
-		if err != nil {
-			_ = response.WriteError(http.StatusInternalServerError,
-				errors.Internal.Cause(err, "fail to get devices derived from the product[%s]", productID))
-			return
-		}
-		for _, device := range devices {
-			_ = r.MetaStore.DeleteDevice(device.ID)
-		}
 	}
-	if err := r.OperationClient.DeleteProduct(protocolID, productID); err != nil {
-		_ = response.WriteError(http.StatusInternalServerError,
-			errors.Internal.Cause(err, "fail to send message about deleting product to the driver[%s]", protocolID))
-		return
-	}
+	_ = response.WriteEntity(struct{}{})
 }
 
 func (r Resource) updateProduct(request *restful.Request, response *restful.Response) {
@@ -118,15 +92,12 @@ func (r Resource) updateProduct(request *restful.Request, response *restful.Resp
 		return
 	}
 
-	if err := r.MetaStore.UpdateProduct(product); err != nil {
+	if err := r.Manager.UpdateProduct(product); err != nil {
 		_ = response.WriteError(http.StatusInternalServerError,
-			errors.Internal.Cause(err, "fail to update the product[%s]", productID))
-		return
-	} else if err = r.OperationClient.UpdateProduct(protocolID, product); err != nil {
-		_ = response.WriteError(http.StatusInternalServerError,
-			errors.Internal.Cause(err, "fail to send message about updating product to the driver[%s]", protocolID))
+			errors.Internal.Cause(err, "fail to update the product: %+v", product))
 		return
 	}
+	_ = response.WriteEntity(product)
 }
 
 func (r Resource) findAllProducts(request *restful.Request, response *restful.Response) {
@@ -136,7 +107,7 @@ func (r Resource) findAllProducts(request *restful.Request, response *restful.Re
 			errors.BadRequest.Error("the query parameter[%s] is required", QueryParamProtocolID))
 		return
 	}
-	products, err := r.MetaStore.ListProducts(protocolID)
+	products, err := r.Manager.ListProducts(protocolID)
 	if err != nil {
 		_ = response.WriteError(http.StatusInternalServerError,
 			errors.Internal.Cause(err, "fail to get products classified as the protocol[%s]", protocolID))
@@ -152,7 +123,7 @@ func (r Resource) findProduct(request *restful.Request, response *restful.Respon
 			errors.BadRequest.Error("the path parameter[%s] is required", PathParamProductID))
 		return
 	}
-	product, err := r.MetaStore.GetProduct(productID)
+	product, err := r.Manager.GetProduct(productID)
 	if err != nil {
 		_ = response.WriteError(http.StatusInternalServerError, err)
 		return

@@ -1,6 +1,35 @@
 manager:
   http:
     port: 10996
+  meta_store:
+    type: file
+    file:
+      path: etc/resources
+  data_store:
+    type: influxdb
+
+    database: "thingio"
+    # https://docs.influxdata.com/influxdb/v2.0/write-data/best-practices/optimize-writes/#batch-writes
+    batch_size: 5000
+
+    influxdb:
+      url: "http://127.0.0.1:8086"
+      username: ""
+      password: ""
+      retention_policy: ""
+      write_consistency: ""
+      timeout: "30s"
+    tdengine:
+      schema: "tcp"
+      host: "127.0.0.1"
+      port: 6030
+      username: "root"
+      password: "taosdata"
+      keep: 3650
+      days: 10
+      blocks: 6
+      update: 0
+      precision: "ns"
 
 msgbus:
   type: "MQTT"

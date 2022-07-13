@@ -3,7 +3,6 @@ package protocol
 import (
 	"fmt"
 	"github.com/emicklei/go-restful/v3"
-	"github.com/thingio/edge-device-std/models"
 	"net/http"
 )
 
@@ -14,9 +13,10 @@ const (
 )
 
 func (r Resource) findAllProtocols(request *restful.Request, response *restful.Response) {
-	protocols := make([]*models.Protocol, 0)
-	for _, item := range r.ProtocolCache.Items() {
-		protocols = append(protocols, item.Object.(*models.Protocol))
+	protocols, err := r.Manager.ListProtocols()
+	if err != nil {
+		_ = response.WriteError(http.StatusInternalServerError, fmt.Errorf("fail to list all protocols"))
+		return
 	}
 	_ = response.WriteEntity(protocols)
 }
@@ -28,10 +28,10 @@ func (r Resource) findProtocol(request *restful.Request, response *restful.Respo
 		return
 	}
 
-	v, ok := r.ProtocolCache.Get(protocolID)
-	if !ok {
-		_ = response.WriteError(http.StatusNotFound, fmt.Errorf("the protocol[%s] is not found", protocolID))
+	protocol, err := r.Manager.GetProtocol(protocolID)
+	if err != nil {
+		_ = response.WriteError(http.StatusInternalServerError, fmt.Errorf("fail to get the protocol"))
 		return
 	}
-	_ = response.WriteEntity(v)
+	_ = response.WriteEntity(protocol)
 }
